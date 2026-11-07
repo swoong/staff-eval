@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>직원 평가</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--bg:#f1f7f7;--card:#fff;--text:#1f2933;--muted:#667;--line:#d5dede;--accent:#0f7b7b;--accent-text:#fff;--danger:#c0392b;--warn-bg:#fff8e1}
+@media (prefers-color-scheme:dark){:root{--bg:#121a1a;--card:#1c2626;--text:#e8eeee;--muted:#9fb0b0;--line:#33443f;--accent:#2aa5a5;--accent-text:#062020;--danger:#ff8a7a;--warn-bg:#3a3318}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:"Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;line-height:1.5}
+.wrap{max-width:760px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:26px;margin:8px 0 12px}
+h2{font-size:18px;color:var(--accent);margin:0 0 8px}
+.tabs{display:flex;gap:8px;margin-bottom:12px}.tabs button{flex:1}
+button{font:inherit;padding:10px 16px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+button.primary,.tabs button.on{background:var(--accent);color:var(--accent-text);border-color:var(--accent);font-weight:700}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
+label.q{display:block;font-weight:600;margin-bottom:8px}
+.req{color:var(--danger)}
+.opt{display:flex;align-items:center;gap:8px;padding:6px 0}
+input[type=text],input[type=password],input[type=number],input[type=date],select,textarea{width:100%;min-height:44px;font:inherit;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text)}
+.warn{background:var(--warn-bg);padding:8px 10px;border-radius:6px;font-size:14px;margin-bottom:10px}
+.hint{color:var(--muted);font-size:13px}
+.err{color:var(--danger);font-size:14px;margin-top:6px}
+.ok{color:var(--accent);font-weight:700}
+.tablebox{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px;white-space:nowrap}
+th,td{border:1px solid var(--line);padding:6px 8px;text-align:left}
+th{background:var(--bg)}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.hidden{display:none}
+button.danger{color:var(--danger)}
+.locked{pointer-events:none;opacity:.5}
+button.sm{padding:4px 10px;font-size:13px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.top h1{margin:8px 0 12px}
+button.ghost{font-size:12px;color:var(--muted);padding:3px 9px;white-space:nowrap}
+.srow{display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:6px;border:1px solid var(--line);border-radius:8px;cursor:pointer}
+.srow.sel{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) inset}
+.srow.done{opacity:.55;cursor:default;background:var(--bg)}
+.srow .nm{flex:1;font-weight:600}
+.badge{font-size:12px;padding:2px 8px;border-radius:10px;border:1px solid var(--line)}
+.badge.ok{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><h1>직원 평가</h1><button id="tabAdmin" class="sm ghost">결과 관리</button></div>
+  <div id="setupWarn" class="warn hidden">⚠ 설정 필요: index.html 상단 CONFIG.apiUrl에 구글 Apps Script 웹 앱 주소를 넣어 주세요.</div>
+
+  <section id="viewForm">
+    <div id="periodMsg" class="warn hidden"></div>
+    <div class="hint"><span class="req">*</span> 필수</div>
+    <form id="f" onsubmit="return false">
+      <div class="card"><label class="q">1. 평가자 <span class="req">*</span></label><div id="evaluators">
+        <div class="row" style="margin:0"><input type="text" id="evInput" placeholder="본인 이름을 입력하세요" autocomplete="off" style="flex:1"><button type="button" id="evBtn" class="primary">확인</button></div>
+        <div id="evMsg" style="margin-top:6px"></div>
+      </div></div>
+      <div class="card"><label class="q">2. 평가일 <span class="req">*</span></label><input type="date" id="date"></div>
+      <div class="card"><label class="q">3. 평가할 직원의 소속 부서를 선택하세요 <span class="req">*</span></label><div id="wards"></div></div>
+      <div class="card">
+        <h2 id="staffTitle">평가 대상자</h2>
+        <div class="warn">⚠ 주의: 이미 평가한 직원을 중복으로 선택하지 않도록 주의해 주세요. (평가자별 직원당 1회 평가)</div>
+        <label class="q">4. 평가할 직원을 선택하세요. <span class="req">*</span></label>
+        <div id="staffProg" class="hint" style="margin-bottom:8px"></div>
+        <div id="staffList"></div>
+        <input type="hidden" id="staff">
+      </div>
+      <div class="card">
+        <h2>공동 평가 질문</h2>
+        <div class="hint" style="margin-bottom:10px">⭐ 괄호 안의 점수는 항목별 최대 점수입니다. 해당 점수 이하로 입력해 주세요. ⭐</div>
+        <div id="questions"></div>
+      </div>
+      <div id="formErr" class="err" style="text-align:center"></div>
+      <div class="row" style="justify-content:center"><button class="primary" id="submit">제출</button><button id="reset">초기화</button></div>
+      <div id="formOk" class="ok" style="text-align:center"></div>
+    </form>
+  </section>
+
+  <section id="viewAdmin" class="hidden">
+    <div class="card" id="adminLock">
+      <label class="q" for="pw">🔒 관리자 비밀번호를 입력하세요</label>
+      <input type="password" id="pw" autocomplete="current-password">
+      <div id="pwErr" class="err"></div>
+      <div class="row"><button class="primary" id="pwOk">확인</button></div>
+    </div>
+    <div id="adminBody" class="hidden">
+      <div class="card">
+        <div class="row">
+          <button class="primary" id="xlsx">엑셀(.xlsx) 다운로드</button>
+          <button id="refresh">새로고침</button>
+          <button id="lockNow">잠금</button>
+        </div>
+        <div class="hint" id="count"></div>
+      </div>
+      <div class="card tablebox"><table id="tbl"></table></div>
+      <div class="card">
+        <h2>평가 기간 설정</h2>
+        <div class="hint" style="margin-bottom:8px">설정한 기간(시작일·종료일 포함) 안에서만 설문을 제출할 수 있습니다. 비워 두면 제한이 없습니다.</div>
+        <div class="row" style="align-items:center"><input type="date" id="pStart" style="width:auto"> ~ <input type="date" id="pEnd" style="width:auto"></div>
+        <div class="row"><button class="primary" id="savePeriod">기간 저장</button><button id="clearPeriod">제한 없음으로</button></div>
+        <div class="hint" id="pStatus"></div>
+      </div>
+      <div class="card hidden" id="editCard">
+        <h2>평가 결과 수정</h2>
+        <div id="editBody"></div>
+        <div class="row"><button class="primary" id="eSave">저장</button><button id="eCancel">취소</button></div>
+      </div>
+      <div class="card">
+        <h2>소속 부서 관리</h2>
+        <div class="hint" style="margin-bottom:8px">부서를 추가·삭제하고 ▲▼로 순서를 바꿉니다. 배정된 피평가자가 있는 부서는 삭제할 수 없습니다. 변경 후 "저장"을 눌러야 반영됩니다.</div>
+        <div id="wardEdit"></div>
+        <div class="row"><input type="text" id="newWard" placeholder="새 부서 이름 (예: 7병동)" style="flex:1;min-width:160px"><button id="addWard">+ 추가</button></div>
+        <div class="row"><button class="primary" id="saveWards">부서 저장</button></div>
+      </div>
+      <div class="card">
+        <h2>평가자 / 피평가자 등록</h2>
+        <div class="hint" style="margin-bottom:8px">평가자를 등록하고, 각 평가자가 평가할 피평가자를 한 줄에 한 명씩 "부서, 이름" 형식으로 입력하세요. (예: 3병동, 주은미) 평가자는 배정된 피평가자만 평가할 수 있습니다. 모든 평가자를 삭제하면 기본 설정(CONFIG)의 평가자와 시트 '직원명단'을 사용합니다.</div>
+        <div id="assignEdit"></div>
+        <div class="row"><button id="addEv">+ 평가자 추가</button><button class="primary" id="saveAssign">저장</button></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+/* ===== 설정: 여기를 수정하세요 ===== */
+const CONFIG = {
+  // Apps Script 배포 후 받은 웹 앱 URL (https://script.google.com/macros/s/.../exec)
+  apiUrl: 'https://script.google.com/macros/s/AKfycbwvRDAqwitUBJZqz6Ax5JIincd1l2rDsGa7t5c-nC3O2eYdPiDzpm9MEFFeus66y8lr/exec',
+  evaluators: ['박지향','장지숙','임안나','김경희'],
+  // 구글 시트 '직원명단' 탭이 비어 있을 때만 쓰이는 기본 명단 (부서 순서도 여기서 정해집니다)
+  wards: {'3병동':['주은미'],'5A병동':[],'5B병동':[],'6병동':[]},
+  questions: [
+    {label:'업무 전문성', desc:'업무지식이 탄탄하며, 긴급상황에서도 안정적 업무 수행', max:25},
+    {label:'책임감', desc:'고객대응에 있어 실수가 없으며, 끝까지 책임 완수', max:25},
+    {label:'커뮤니케이션 역량', desc:'환자와 보호자에게 친절하고 공감적 대응 역량, 동료간 협업관계 및 팀워크 역량', max:25},
+    {label:'윤리성 및 신뢰성', desc:'병원규정준수 및 충실도', max:15},
+    {label:'성실성(근태)', desc:'결근, 지각, 조퇴', max:10}
+  ],
+  // 서술형 문항 (점수 합계에는 포함되지 않음)
+  comment: {label:'피평가자의 개선 필요사항', minLen:20}
+};
+/* ================================== */
+
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const today=()=>new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Seoul'}); // 항상 한국 시간(yyyy-mm-dd) 기준
+let SERVER={staff:{},wards:[],assign:[],doneList:[],period:{}}, ADMINPW='';
+
+async function api(action,data){
+  if(!CONFIG.apiUrl) throw new Error('apiUrl 미설정');
+  const r=await fetch(CONFIG.apiUrl,{method:'POST',body:JSON.stringify({action,...data})});
+  return r.json();
+}
+const wardNames=()=>SERVER.wards.length?SERVER.wards:Object.keys(CONFIG.wards);
+function staffMap(){
+  const m={}, useSheet=Object.keys(SERVER.staff).length>0;
+  for(const w of wardNames()) m[w]=useSheet?(SERVER.staff[w]||[]):(CONFIG.wards[w]||[]);
+  for(const w of Object.keys(SERVER.staff)) if(!(w in m)) m[w]=SERVER.staff[w];
+  return m;
+}
+const checked=n=>(document.querySelector(`input[name=${n}]:checked`)||{}).value;
+function radios(el,name,items,sel,onchange){
+  el.innerHTML=items.map(v=>`<label class="opt"><input type="radio" name="${name}" value="${esc(v)}"${v===sel?' checked':''}> ${esc(v)}</label>`).join('');
+  if(onchange) el.querySelectorAll('input').forEach(r=>r.addEventListener('change',onchange));
+}
+let EVAL='';
+const evSel=()=>EVAL;
+const norm=s=>String(s||'').replace(/\s+/g,'');
+function matchEvaluator(showErr){
+  const v=norm($('#evInput').value), msg=$('#evMsg');
+  const hit=v?(evaluatorNames().find(n=>norm(n)===v)||''):'';
+  const changed=hit!==EVAL; EVAL=hit;
+  if(EVAL){ msg.className='ok'; msg.textContent=`✔ ${EVAL}님 확인되었습니다.`; }
+  else if(showErr&&v){ msg.className='err'; msg.textContent='등록되지 않은 평가자입니다. 이름을 다시 확인하세요.'; }
+  else { msg.className=''; msg.textContent=''; }
+  if(changed) renderWards();
+}
+const evaluatorNames=()=>SERVER.assign.length?SERVER.assign.map(a=>a.evaluator):CONFIG.evaluators;
+function staffFor(ev){
+  if(!SERVER.assign.length) return staffMap();
+  const a=SERVER.assign.find(x=>x.evaluator===ev), m={};
+  if(a) for(const it of a.items) (m[it.ward]=m[it.ward]||[]).push(it.staff);
+  return m;
+}
+const doneSet=(ev,ward)=>new Set(SERVER.doneList.filter(d=>d[0]===ev&&d[1]===ward).map(d=>String(d[2])));
+function renderWards(){
+  const ev=evSel();
+  if(!ev){ $('#wards').innerHTML='<div class="hint">1번에서 본인 이름을 입력하고 확인해 주세요.</div>'; renderStaff(); return; }
+  const m=staffFor(ev), order=wardNames();
+  const keys=Object.keys(m).filter(w=>m[w].length).sort((x,y)=>{const i=order.indexOf(x),j=order.indexOf(y);return (i<0?99:i)-(j<0?99:j)});
+  if(!keys.length){ $('#wards').innerHTML='<div class="hint">이 평가자에게 배정된 피평가자가 없습니다. 관리자에게 문의하세요.</div>'; renderStaff(); return; }
+  radios($('#wards'),'ward',keys,checked('ward'),renderStaff); renderStaff();
+}
+function renderStaff(){
+  const ward=checked('ward'), ev=evSel();
+  $('#staffTitle').textContent=(ward||'')+' 평가 대상자';
+  const list=(ward&&ev)?(staffFor(ev)[ward]||[]):[];
+  const done=doneSet(ev,ward);
+  let sel=$('#staff').value;
+  if(!list.includes(sel)||done.has(sel)) sel='';
+  $('#staff').value=sel;
+  if(!ward){ $('#staffProg').textContent=''; $('#staffList').innerHTML='<div class="hint">3번에서 소속 부서를 먼저 선택하세요.</div>'; return; }
+  if(!list.length){ $('#staffProg').textContent=''; $('#staffList').innerHTML='<div class="hint">배정된 직원이 없습니다.</div>'; return; }
+  const cnt=list.filter(n=>done.has(n)).length;
+  $('#staffProg').textContent=`평가 완료 ${cnt}명 / 전체 ${list.length}명 (미평가 ${list.length-cnt}명)`;
+  $('#staffList').innerHTML=list.map(n=>{
+    const d=done.has(n);
+    return `<label class="srow${d?' done':''}${n===sel?' sel':''}"><input type="radio" name="staffpick" value="${esc(n)}"${d?' disabled':''}${n===sel?' checked':''}><span class="nm">${esc(n)}</span><span class="badge${d?' ok':''}">${d?'✔ 평가 완료':'미평가'}</span></label>`;
+  }).join('');
+}
+async function loadConfig(){
+  if(!CONFIG.apiUrl) return;
+  try{ const r=await api('config'); if(r.ok){SERVER={staff:r.staff||{},wards:r.wards||[],assign:r.assign||[],doneList:r.doneList||[],period:r.period||{}}; matchEvaluator(false); renderWards(); renderPeriod();} }catch(e){}
+}
+function buildForm(){
+  $('#date').value=today();
+  $('#questions').innerHTML=CONFIG.questions.map((q,i)=>`
+    <div style="margin-bottom:16px"><label class="q">${i+5}. ${esc(q.label)} _ ${esc(q.desc)} [${q.max}점] <span class="req">*</span></label>
+    <input type="number" inputmode="numeric" min="0" max="${q.max}" step="1" data-i="${i}" placeholder="${q.max}보다 작거나 같은 숫자를 입력하세요."></div>`).join('')
+    +`<div class="card" style="background:var(--bg)"><b>5~${CONFIG.questions.length+4}번 점수 합계: <span id="sum">0</span> / ${maxTotal()}점</b></div>`
+    +`<div style="margin-bottom:8px"><label class="q">${CONFIG.questions.length+5}. ${esc(CONFIG.comment.label)} <span class="req">*</span></label><textarea id="comment" rows="3" placeholder="${CONFIG.comment.minLen}자 이상 입력하세요."></textarea><div id="commentMsg" class="err"></div></div>`;
+  document.querySelectorAll('#questions input[data-i]').forEach(i=>{
+    const max=CONFIG.questions[Number(i.dataset.i)].max;
+    i.addEventListener('keydown',e=>{if(['-','+','.','e','E',','].includes(e.key)) e.preventDefault();});
+    i.addEventListener('input',()=>{
+      if(i.value!==''){
+        let n=Math.floor(Number(i.value));
+        if(!Number.isFinite(n)||n<0) n=0;
+        if(n>max) n=max;
+        if(String(n)!==i.value) i.value=n;
+      }
+      updateSum();
+    });
+  });
+  $('#comment').addEventListener('input',()=>updateComment(true));
+  $('#comment').addEventListener('blur',()=>updateComment(true));
+  renderWards();
+}
+const fmtPeriod=p=>`${p.start||'제한 없음'} ~ ${p.end||'제한 없음'}`;
+function periodState(){
+  const p=SERVER.period||{}, t=today();
+  if(p.start&&t<p.start) return {open:false,msg:`지금은 평가 기간이 아닙니다. (평가 기간: ${fmtPeriod(p)})`};
+  if(p.end&&t>p.end) return {open:false,msg:`평가 기간이 종료되었습니다. (평가 기간: ${fmtPeriod(p)})`};
+  return {open:true,msg:(p.start||p.end)?`평가 기간: ${fmtPeriod(p)}`:''};
+}
+function renderPeriod(){
+  const st=periodState(), m=$('#periodMsg');
+  m.textContent=st.msg; m.classList.toggle('hidden',!st.msg);
+  $('#f').classList.toggle('locked',!st.open); $('#submit').disabled=!st.open; $('#reset').disabled=!st.open;
+}
+function renderPeriodEdit(){
+  const p=SERVER.period||{}; $('#pStart').value=p.start||''; $('#pEnd').value=p.end||'';
+  const st=periodState(); $('#pStatus').textContent=(p.start||p.end)?`현재 설정: ${fmtPeriod(p)} — ${st.open?'입력 가능':'입력 불가'}`:'현재 설정: 기간 제한 없음 (언제든 입력 가능)';
+}
+async function savePeriod(clear){
+  const start=clear?'':$('#pStart').value, end=clear?'':$('#pEnd').value;
+  if(start&&end&&start>end) return alert('시작일이 종료일보다 늦을 수 없습니다.');
+  try{
+    const r=await api('savePeriod',{pw:ADMINPW,start,end});
+    if(r.ok){ await loadConfig(); renderPeriodEdit(); alert(clear?'기간 제한을 해제했습니다.':'평가 기간을 저장했습니다.'); }
+    else alert('저장 실패: '+(r.error||(r.auth===false?'비밀번호 오류':'알 수 없는 오류')));
+  }catch(e){ alert('서버에 연결할 수 없습니다.'); }
+}
+function updateComment(show){
+  const n=$('#comment').value.trim().length, min=CONFIG.comment.minLen;
+  $('#commentMsg').textContent=(show&&n>0&&n<min)?`${min}자 이상 작성해 주세요. (현재 ${n}자)`:'';
+  return n>=min;
+}
+const maxTotal=()=>CONFIG.questions.reduce((a,q)=>a+q.max,0);
+function updateSum(){
+  let s=0; document.querySelectorAll('#questions input[data-i]').forEach(i=>{const n=Number(i.value); if(i.value!==''&&Number.isFinite(n)) s+=n;});
+  $('#sum').textContent=s;
+  if(!$('#comment').value.trim()) $('#commentMsg').textContent='';
+}
+const headers=()=>['제출시각','평가자','평가일','소속 부서','평가 대상',...CONFIG.questions.map(q=>`${q.label}(${q.max})`),`총점(${maxTotal()})`,CONFIG.comment.label];
+
+async function submitForm(){
+  const err=$('#formErr'); err.textContent=''; $('#formOk').textContent='';
+  const ps=periodState(); if(!ps.open) return err.textContent=ps.msg;
+  const ev=evSel(), ward=checked('ward'), date=$('#date').value, staff=$('#staff').value;
+  if(!ev) return err.textContent='1. 본인 이름을 입력하고 "확인"을 눌러 주세요.';
+  if(!date) return err.textContent='2. 평가일을 입력하세요.';
+  if(!ward) return err.textContent='3. 소속 부서를 선택하세요.';
+  if(!staff) return err.textContent='4. 평가할 직원을 선택하세요.';
+  if(doneSet(ev,ward).has(staff)) return err.textContent='이미 평가를 완료한 직원입니다. (평가자별 직원당 1회 평가)';
+  const scores=[];
+  for(const [i,q] of CONFIG.questions.entries()){
+    const raw=document.querySelector(`input[data-i="${i}"]`).value, n=Number(raw);
+    if(raw===''||!Number.isFinite(n)||n<0||n>q.max) return err.textContent=`${i+5}. ${q.label}: 0~${q.max} 사이의 숫자를 입력하세요.`;
+    scores.push(n);
+  }
+  const comment=$('#comment').value.trim();
+  if(comment.length<CONFIG.comment.minLen){
+    err.textContent=`${CONFIG.questions.length+5}. ${CONFIG.comment.label}: ${CONFIG.comment.minLen}자 이상 작성해 주세요. (현재 ${comment.length}자)`;
+    $('#commentMsg').textContent=`${CONFIG.comment.minLen}자 이상 작성해 주세요. (현재 ${comment.length}자)`;
+    $('#comment').scrollIntoView({block:'center'}); $('#comment').focus();
+    return;
+  }
+  const row=['',ev,date,ward,staff,...scores,scores.reduce((a,b)=>a+b,0),comment];
+  const btn=$('#submit'); btn.disabled=true; $('#formOk').textContent='제출 중...';
+  try{
+    const r=await api('submit',{headers:headers(),row});
+    if(r.closed){ $('#formOk').textContent=''; SERVER.period=r.period||SERVER.period; renderPeriod(); err.textContent='지금은 평가 기간이 아니어서 제출할 수 없습니다.'; }
+    else if(r.notAssigned){ $('#formOk').textContent=''; err.textContent='배정되지 않은 직원입니다. 관리자에게 문의하세요.'; }
+    else if(r.duplicate){ $('#formOk').textContent=''; err.textContent='이미 평가가 완료된 직원입니다. (한 직원당 1회 평가)'; }
+    else if(r.ok){ $('#formOk').textContent='제출되었습니다. 감사합니다.'; document.querySelectorAll('#questions input').forEach(i=>i.value=''); $('#comment').value=''; updateSum(); $('#staff').value=''; }
+    else { $('#formOk').textContent=''; err.textContent='제출에 실패했습니다: '+(r.error||'알 수 없는 오류'); }
+  }catch(e){ $('#formOk').textContent=''; err.textContent='서버에 연결할 수 없습니다. 설정(apiUrl)과 네트워크를 확인하세요.'; }
+  btn.disabled=false; loadConfig();
+}
+function resetForm(){
+  document.querySelectorAll('input[type=radio]').forEach(r=>r.checked=false);
+  document.querySelectorAll('#questions input').forEach(i=>i.value='');
+  $('#comment').value=''; updateSum();
+  $('#evInput').value=''; matchEvaluator(false); $('#date').value=today(); renderWards(); $('#formErr').textContent=''; $('#formOk').textContent='';
+}
+
+/* 관리자 */
+let ROWS=[], HEAD=[];
+function renderAdmin(){
+  $('#count').textContent=`총 ${ROWS.length}건`;
+  $('#tbl').innerHTML='<tr>'+HEAD.map(h=>`<th>${esc(h)}</th>`).join('')+'<th>관리</th></tr>'+
+    ROWS.map((r,i)=>'<tr>'+r.map(v=>`<td>${esc(v)}</td>`).join('')+`<td><button class="sm" data-edit="${i}">수정</button> <button class="sm danger" data-del="${i}">삭제</button></td></tr>`).join('');
+}
+let WARDS_EDIT=[];
+function drawWardEdit(){
+  $('#wardEdit').innerHTML=WARDS_EDIT.map((w,i)=>`<div class="row" style="align-items:center;margin:4px 0"><span class="nm" style="flex:1;font-weight:600">${esc(w)}</span><button class="sm" data-up="${i}"${i===0?' disabled':''}>▲</button><button class="sm" data-down="${i}"${i===WARDS_EDIT.length-1?' disabled':''}>▼</button><button class="sm danger" data-wrm="${i}">삭제</button></div>`).join('')||'<div class="hint">등록된 부서가 없습니다.</div>';
+}
+function renderWardEdit(){ WARDS_EDIT=[...wardNames()]; drawWardEdit(); }
+function addWard(){
+  const v=$('#newWard').value.trim(); if(!v) return;
+  if(/[,]/.test(v)) return alert('부서 이름에는 쉼표(,)를 쓸 수 없습니다.');
+  if(WARDS_EDIT.includes(v)) return alert('이미 등록된 부서입니다.');
+  WARDS_EDIT.push(v); $('#newWard').value=''; drawWardEdit();
+}
+function wardInUse(w){ return SERVER.assign.reduce((n,a)=>n+a.items.filter(it=>it.ward===w).length,0); }
+async function saveWards(){
+  try{
+    const r=await api('saveWards',{pw:ADMINPW,wards:WARDS_EDIT});
+    if(r.ok){ await loadConfig(); renderWardEdit(); renderAssignEdit(); alert('소속 부서를 저장했습니다.'); }
+    else alert('저장에 실패했습니다: '+(r.error||(r.auth===false?'비밀번호 오류':'알 수 없는 오류')));
+  }catch(e){ alert('서버에 연결할 수 없습니다.'); }
+}
+function assignBlock(name,items){
+  const lines=(items||[]).map(it=>`${it.ward}, ${it.staff}`).join('\n');
+  return `<div class="card evBlock" style="background:var(--bg)"><div class="row" style="align-items:center;margin-top:0"><input type="text" class="evName" placeholder="평가자 이름" value="${esc(name)}" style="flex:1"><button class="sm danger" data-rm="1">삭제</button></div><textarea class="evItems" rows="${Math.max(3,(items||[]).length+1)}" placeholder="3병동, 주은미">${esc(lines)}</textarea></div>`;
+}
+function renderAssignEdit(){
+  const a=SERVER.assign.length?SERVER.assign:CONFIG.evaluators.map(n=>({evaluator:n,items:[]}));
+  $('#assignEdit').innerHTML=a.map(x=>assignBlock(x.evaluator,x.items)).join('');
+}
+async function saveAssign(){
+  const out=[], names=new Set();
+  for(const b of document.querySelectorAll('#assignEdit .evBlock')){
+    const name=b.querySelector('.evName').value.trim(), txt=b.querySelector('.evItems').value;
+    if(!name){ if(txt.trim()) return alert('평가자 이름이 비어 있는 항목이 있습니다.'); continue; }
+    if(names.has(name)) return alert('평가자 이름이 중복되었습니다: '+name);
+    names.add(name);
+    const items=[], seen=new Set();
+    for(const line of txt.split('\n')){
+      const t=line.trim(); if(!t) continue;
+      const m=t.match(/^([^,\s]+)\s*[,\s]\s*(.+)$/);
+      if(!m) return alert(`${name}: "${t}" 줄 형식이 올바르지 않습니다. (예: 3병동, 주은미)`);
+      if(!wardNames().includes(m[1])) return alert(`${name}: 부서 "${m[1]}"는 등록되지 않았습니다.\n먼저 "소속 부서 관리"에서 부서를 추가하고 저장하세요.`);
+      const key=m[1]+'|'+m[2].trim(); if(seen.has(key)) continue; seen.add(key);
+      items.push({ward:m[1],staff:m[2].trim()});
+    }
+    out.push({evaluator:name,items});
+  }
+  try{
+    const r=await api('saveAssign',{pw:ADMINPW,assign:out});
+    if(r.ok){ await loadConfig(); renderAssignEdit(); alert('평가자 / 피평가자를 저장했습니다.'); }
+    else alert('저장에 실패했습니다: '+(r.error||(r.auth===false?'비밀번호 오류':'알 수 없는 오류')));
+  }catch(e){ alert('서버에 연결할 수 없습니다.'); }
+}
+async function deleteRow(i){
+  const r=ROWS[i];
+  if(!confirm(`${r[3]} ${r[4]} 직원의 평가 결과를 삭제할까요?\n삭제하면 해당 직원을 다시 평가할 수 있습니다.`)) return;
+  try{
+    const res=await api('deleteResult',{pw:ADMINPW,evaluator:r[1],ward:r[3],staff:r[4]});
+    if(res.ok){ await loadResults(); loadConfig(); } else alert('삭제 실패: '+(res.error||'알 수 없는 오류'));
+  }catch(e){ alert('서버에 연결할 수 없습니다.'); }
+}
+let EDIT=-1;
+function openEdit(i){
+  const r=ROWS[i], n=CONFIG.questions.length; EDIT=i;
+  $('#editBody').innerHTML=`<div class="hint" style="margin-bottom:8px">평가자: ${esc(r[1])} · ${esc(r[3])} · ${esc(r[4])}</div>
+    <label class="q" style="margin-top:10px">평가일</label><input type="date" id="eDate" value="${esc(r[2])}">`+
+    CONFIG.questions.map((q,k)=>`<label class="q" style="margin-top:10px">${k+5}. ${esc(q.label)} [${q.max}점]</label><input type="number" min="0" max="${q.max}" data-e="${k}" value="${esc(r[5+k])}">`).join('')+
+    `<label class="q" style="margin-top:10px">${n+5}. ${esc(CONFIG.comment.label)}</label><textarea id="eComment" rows="3">${esc(r[6+n])}</textarea><div id="eErr" class="err"></div>`;
+  $('#editCard').classList.remove('hidden'); $('#editCard').scrollIntoView({block:'center'});
+}
+async function saveEdit(){
+  const r=ROWS[EDIT], err=$('#eErr'); err.textContent='';
+  const date=$('#eDate').value; if(!date) return err.textContent='평가일을 입력하세요.';
+  const scores=[];
+  for(const [k,q] of CONFIG.questions.entries()){
+    const raw=document.querySelector(`[data-e="${k}"]`).value, v=Number(raw);
+    if(raw===''||!Number.isFinite(v)||v<0||v>q.max) return err.textContent=`${k+5}. ${q.label}: 0~${q.max} 사이의 숫자를 입력하세요.`;
+    scores.push(v);
+  }
+  const comment=$('#eComment').value.trim();
+  if(comment.length<CONFIG.comment.minLen) return err.textContent=`${CONFIG.questions.length+5}. ${CONFIG.comment.label}: ${CONFIG.comment.minLen}자 이상 작성해 주세요. (현재 ${comment.length}자)`;
+  const row=[r[0],r[1],date,r[3],r[4],...scores,scores.reduce((a,b)=>a+b,0),comment];
+  try{
+    const res=await api('updateResult',{pw:ADMINPW,row});
+    if(res.ok){ $('#editCard').classList.add('hidden'); EDIT=-1; await loadResults(); }
+    else err.textContent='저장 실패: '+(res.error||'알 수 없는 오류');
+  }catch(e){ err.textContent='서버에 연결할 수 없습니다.'; }
+}
+async function loadResults(){
+  const r=await api('results',{pw:ADMINPW});
+  if(!r.ok) throw new Error(r.auth===false?'auth':(r.error||'error'));
+  HEAD=r.headers.length?r.headers:headers(); ROWS=r.rows; renderAdmin();
+}
+function applyLock(){
+  const on=!!ADMINPW;
+  $('#adminLock').classList.toggle('hidden',on); $('#adminBody').classList.toggle('hidden',!on);
+  if(on){ renderWardEdit(); renderAssignEdit(); renderPeriodEdit(); } else $('#editCard').classList.add('hidden');
+  if(!on){$('#pw').value='';$('#pwErr').textContent='';}
+}
+async function tryLogin(){
+  ADMINPW=$('#pw').value; $('#pwErr').textContent='확인 중...';
+  try{ await loadResults(); applyLock(); }
+  catch(e){ ADMINPW=''; $('#pwErr').textContent=e.message==='auth'?'비밀번호가 올바르지 않습니다.':'서버에 연결할 수 없습니다. 설정(apiUrl)을 확인하세요.'; }
+}
+function exportXlsx(){
+  if(!ROWS.length) return alert('저장된 결과가 없습니다.');
+  const ws=XLSX.utils.aoa_to_sheet([HEAD,...ROWS]); ws['!cols']=HEAD.map(()=>({wch:16}));
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'직원평가');
+  XLSX.writeFile(wb,`직원평가_${today()}.xlsx`);
+}
+function show(tab){
+  $('#viewForm').classList.toggle('hidden',tab!=='form'); $('#viewAdmin').classList.toggle('hidden',tab!=='admin');
+  $('#tabAdmin').textContent=tab==='admin'?'← 설문으로':'결과 관리';
+  if(tab==='admin') applyLock(); else {ADMINPW=''; loadConfig();}
+}
+$('#tabAdmin').onclick=()=>show($('#viewAdmin').classList.contains('hidden')?'admin':'form');
+$('#staffList').addEventListener('change',e=>{ if(e.target.name==='staffpick'){ $('#staff').value=e.target.value; renderStaff(); } });
+$('#submit').onclick=submitForm; $('#reset').onclick=resetForm;
+$('#pwOk').onclick=tryLogin;
+$('#pw').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();tryLogin()}});
+$('#xlsx').onclick=exportXlsx;
+$('#refresh').onclick=()=>loadResults().catch(()=>alert('불러오지 못했습니다.'));
+$('#lockNow').onclick=()=>{ADMINPW='';applyLock()};
+$('#tbl').addEventListener('click',e=>{
+  const t=e.target; if(t.dataset.del!==undefined) deleteRow(Number(t.dataset.del)); else if(t.dataset.edit!==undefined) openEdit(Number(t.dataset.edit));
+});
+$('#editBody').addEventListener('input',e=>{
+  const t=e.target; if(t.dataset.e===undefined||t.value==='') return;
+  const max=CONFIG.questions[Number(t.dataset.e)].max; let n=Math.floor(Number(t.value));
+  if(!Number.isFinite(n)||n<0) n=0; if(n>max) n=max; if(String(n)!==t.value) t.value=n;
+});
+$('#eSave').onclick=saveEdit; $('#eCancel').onclick=()=>{$('#editCard').classList.add('hidden');EDIT=-1};
+$('#saveWards').onclick=saveWards; $('#addWard').onclick=addWard;
+$('#newWard').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); addWard(); } });
+$('#wardEdit').addEventListener('click',e=>{
+  const d=e.target.dataset, i=Number(d.up??d.down??d.wrm);
+  if(d.up!==undefined&&i>0){ [WARDS_EDIT[i-1],WARDS_EDIT[i]]=[WARDS_EDIT[i],WARDS_EDIT[i-1]]; drawWardEdit(); }
+  else if(d.down!==undefined&&i<WARDS_EDIT.length-1){ [WARDS_EDIT[i+1],WARDS_EDIT[i]]=[WARDS_EDIT[i],WARDS_EDIT[i+1]]; drawWardEdit(); }
+  else if(d.wrm!==undefined){
+    const w=WARDS_EDIT[i], n=wardInUse(w);
+    if(n>0) return alert(`"${w}"에는 배정된 피평가자가 ${n}명 있어 삭제할 수 없습니다.\n먼저 평가자 배정에서 해당 직원을 제거하고 저장하세요.`);
+    if(confirm(`"${w}" 부서를 삭제할까요? (이미 제출된 결과는 삭제되지 않습니다.)`)){ WARDS_EDIT.splice(i,1); drawWardEdit(); }
+  }
+});
+$('#saveAssign').onclick=saveAssign;
+$('#addEv').onclick=()=>$('#assignEdit').insertAdjacentHTML('beforeend',assignBlock('',[]));
+$('#assignEdit').addEventListener('click',e=>{
+  if(e.target.dataset.rm&&confirm('이 평가자를 목록에서 삭제할까요?\n(이미 제출된 결과는 삭제되지 않으며, "저장"을 눌러야 반영됩니다.)')) e.target.closest('.evBlock').remove();
+});
+$('#savePeriod').onclick=()=>savePeriod(false); $('#clearPeriod').onclick=()=>savePeriod(true);
+$('#evInput').addEventListener('input',()=>matchEvaluator(false));
+$('#evInput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); matchEvaluator(true); } });
+$('#evBtn').onclick=()=>matchEvaluator(true);
+if(!CONFIG.apiUrl) $('#setupWarn').classList.remove('hidden');
+buildForm(); loadConfig();
+</script>
+</body>
+</html>
