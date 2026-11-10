@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>직원 평가</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>if(!window.XLSX){document.write('<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"><\/script>');}</script>
 <style>
 :root{--bg:#f1f7f7;--card:#fff;--text:#1f2933;--muted:#667;--line:#d5dede;--accent:#0f7b7b;--accent-text:#fff;--danger:#c0392b;--warn-bg:#fff8e1}
 @media (prefers-color-scheme:dark){:root{--bg:#121a1a;--card:#1c2626;--text:#e8eeee;--muted:#9fb0b0;--line:#33443f;--accent:#2aa5a5;--accent-text:#062020;--danger:#ff8a7a;--warn-bg:#3a3318}}
@@ -121,6 +122,8 @@ button.ghost{font-size:12px;color:var(--muted);padding:3px 9px;white-space:nowra
         <h2>평가표 입력 (피평가자 × 평가자)</h2>
         <div class="hint" style="margin-bottom:8px">한 줄에 피평가자 1명(부서·이름)과 그 직원을 평가할 평가자를 최대 3명까지 입력합니다. 평가자1은 필수이고, 평가자2·3은 비워 둘 수 있습니다. 엑셀에서 범위를 복사해 첫 칸에 붙여넣거나, 엑셀 파일을 올릴 수 있습니다. "저장"하면 현재 표의 내용으로 평가자 배정 전체가 교체되며, 표에 없는 새 부서는 자동으로 추가됩니다.</div>
         <div class="row"><button id="xlTpl">엑셀 양식 받기</button><button id="xlOut">표를 엑셀로 저장</button><button id="xlUp">엑셀 올리기</button></div>
+        <div class="warn">⚠ 엑셀을 올려서 저장하면 기존 평가표 <b>전체가 엑셀 내용으로 교체</b>됩니다. (추가가 아니라 전체 교체입니다. 일부만 고치려면 "표를 엑셀로 저장"으로 받은 파일을 수정해서 올리세요.)</div>
+        <div id="xlStatus" style="margin:6px 0;font-size:14px"></div>
         <input type="file" id="xlFile" accept=".xlsx,.xls,.csv" class="hidden">
         <div class="tablebox" id="gridBox"></div>
         <datalist id="wardList"></datalist><datalist id="evList"></datalist>
@@ -134,7 +137,7 @@ button.ghost{font-size:12px;color:var(--muted);padding:3px 9px;white-space:nowra
 /* ===== 설정: 여기를 수정하세요 ===== */
 const CONFIG = {
   // Apps Script 배포 후 받은 웹 앱 URL (https://script.google.com/macros/s/.../exec)
-  apiUrl: 'https://script.google.com/macros/s/AKfycbwvRDAqwitUBJZqz6Ax5JIincd1l2rDsGa7t5c-nC3O2eYdPiDzpm9MEFFeus66y8lr/exec',
+  apiUrl: 'https://script.google.com/macros/s/AKfycbwkBLRypwMBGvAFMdxrf6bDGC2cC-zN-9ld9Mi3tTqbm0RsUYdA197DdAGgc8fEAU0l/exec',
   evaluators: ['박지향','장지숙','임안나','김경희'],
   // 구글 시트 '직원명단' 탭이 비어 있을 때만 쓰이는 기본 명단 (부서 순서도 여기서 정해집니다)
   wards: {'3병동':['주은미'],'5A병동':[],'5B병동':[],'6병동':[]},
@@ -218,8 +221,14 @@ function renderStaff(){
   }).join('');
 }
 async function loadConfig(){
-  if(!CONFIG.apiUrl) return;
-  try{ const r=await api('config'); if(r.ok){SERVER={staff:r.staff||{},wards:r.wards||[],assign:r.assign||[],doneList:r.doneList||[],period:r.period||{}}; matchEvaluator(false); renderWards(); renderPeriod();} }catch(e){}
+  if(!CONFIG.apiUrl) return false;
+  try{
+    const r=await api('config');
+    if(!r.ok) return false;
+    SERVER={staff:r.staff||{},wards:r.wards||[],assign:r.assign||[],doneList:r.doneList||[],period:r.period||{}};
+    matchEvaluator(false); renderWards(); renderPeriod();
+    return true;
+  }catch(e){ return false; }
 }
 function buildForm(){
   $('#date').value=today();
@@ -350,24 +359,41 @@ async function saveWards(){
     else alert('저장에 실패했습니다: '+(r.error||(r.auth===false?'비밀번호 오류':'알 수 없는 오류')));
   }catch(e){ alert('서버에 연결할 수 없습니다.'); }
 }
+let GRID_DIRTY=false; // 저장하지 않은 표 변경이 있는지
+const leaveOk=()=>{ if(!GRID_DIRTY) return true; if(confirm('저장하지 않은 평가표 변경 내용이 있습니다.\n이동하면 변경 내용이 사라집니다. 이동할까요?')){ GRID_DIRTY=false; return true; } return false; };
+window.addEventListener('beforeunload',e=>{ if(GRID_DIRTY){ e.preventDefault(); e.returnValue=''; } });
 const MAXEV=3; // 피평가자 1명당 평가자는 최대 3명 (평가자2·3은 비워 둘 수 있음)
 let GRID_ROWS=[], EVCOLS=MAXEV;
 const blankRow=()=>Array(2+EVCOLS).fill('');
 const isHeaderRow=c=>['피평가자','부서','부서명'].includes(String(c[0]||'').trim())||String(c[1]||'').trim()==='이름';
 function gridFromAssign(){
-  const map=new Map();
+  // 서버에 저장된 '차수(slot)'와 '순번(order)'으로 입력했던 표를 그대로 복원
+  const map=new Map(); let seq=0, over=false;
   for(const a of SERVER.assign) for(const it of a.items){
-    const k=it.ward+'|'+it.staff; if(!map.has(k)) map.set(k,[it.ward,it.staff]); map.get(k).push(a.evaluator);
+    const k=it.ward+'|'+it.staff;
+    if(!map.has(k)) map.set(k,{ward:it.ward,staff:it.staff,order:0,seq:seq++,evs:Array(MAXEV).fill(''),legacy:[]});
+    const row=map.get(k);
+    if(it.order&&(!row.order||it.order<row.order)) row.order=it.order;
+    const idx=(it.slot>=1&&it.slot<=MAXEV)?it.slot-1:-1;
+    if(idx>=0&&!row.evs[idx]) row.evs[idx]=a.evaluator; else row.legacy.push(a.evaluator);
   }
   const order=wardNames();
-  const rows=[...map.values()].sort((x,y)=>{const i=order.indexOf(x[0]),j=order.indexOf(y[0]);return (i<0?99:i)-(j<0?99:j)});
-  const over=rows.some(r=>r.length>2+MAXEV);
+  const list=[...map.values()];
+  for(const row of list){ // 차수 정보가 없는 예전 데이터는 빈 칸에 차례로 채움
+    for(const ev of row.legacy){ const e=row.evs.indexOf(''); if(e>=0) row.evs[e]=ev; else over=true; }
+  }
+  list.sort((x,y)=>{
+    if(x.order&&y.order) return x.order-y.order;
+    if(x.order) return -1; if(y.order) return 1;
+    const i=order.indexOf(x.ward), j=order.indexOf(y.ward);
+    return ((i<0?99:i)-(j<0?99:j))||(x.seq-y.seq);
+  });
   EVCOLS=MAXEV;
-  GRID_ROWS=rows.map(r=>{const x=r.slice(0,2+MAXEV); while(x.length<2+EVCOLS) x.push(''); return x;});
+  GRID_ROWS=list.map(r=>[r.ward,r.staff,...r.evs]);
   if(!GRID_ROWS.length) GRID_ROWS=[blankRow(),blankRow(),blankRow()];
   if(over) alert('일부 직원에게 평가자가 4명 이상 배정되어 있어 표에는 3명까지만 표시됩니다.\n이 표를 그대로 저장하면 초과된 평가자 배정은 제외됩니다.');
 }
-function renderGrid(){ gridFromAssign(); drawGrid(); }
+function renderGrid(){ gridFromAssign(); GRID_DIRTY=false; drawGrid(); }
 function drawGrid(){
   $('#wardList').innerHTML=wardNames().map(w=>`<option value="${esc(w)}">`).join('');
   $('#evList').innerHTML=SERVER.assign.map(a=>`<option value="${esc(a.evaluator)}">`).join('');
@@ -378,14 +404,15 @@ function drawGrid(){
   $('#gridBox').innerHTML=h+'</table>';
 }
 function syncGrid(){ document.querySelectorAll('#gridBox input').forEach(i=>{ GRID_ROWS[Number(i.dataset.r)][Number(i.dataset.c)]=i.value; }); }
-function addRow(){ syncGrid(); GRID_ROWS.push(blankRow()); drawGrid(); }
-function delRow(i){ syncGrid(); GRID_ROWS.splice(i,1); if(!GRID_ROWS.length) GRID_ROWS=[blankRow()]; drawGrid(); }
+function addRow(){ GRID_DIRTY=true; syncGrid(); GRID_ROWS.push(blankRow()); drawGrid(); }
+function delRow(i){ GRID_DIRTY=true; syncGrid(); GRID_ROWS.splice(i,1); if(!GRID_ROWS.length) GRID_ROWS=[blankRow()]; drawGrid(); }
 function cleanRows(rows){
   return rows.filter(r=>!isHeaderRow(r)).map(r=>{
     const x=r.map(v=>String(v??'').trim()); while(x.length>2&&x[x.length-1]==='') x.pop(); return x;
   }).filter(r=>r[0]||r[1]);
 }
 function setGrid(rows){
+  GRID_DIRTY=true;
   rows=cleanRows(rows);
   const over=rows.some(r=>r.length>2+MAXEV);
   EVCOLS=MAXEV;
@@ -398,7 +425,7 @@ function onGridPaste(e){
   const t=e.target; if(t.dataset.r===undefined) return;
   const text=(e.clipboardData||window.clipboardData).getData('text');
   if(!/[\t\n]/.test(text.replace(/\r/g,'').trim())) return; // 한 칸짜리 붙여넣기는 기본 동작
-  e.preventDefault(); syncGrid();
+  e.preventDefault(); GRID_DIRTY=true; syncGrid();
   const r0=Number(t.dataset.r), c0=Number(t.dataset.c);
   const lines=cleanRows(text.replace(/\r/g,'').split('\n').map(l=>l.split('\t')));
   let over=false;
@@ -412,14 +439,24 @@ function onGridPaste(e){
   drawGrid();
   if(over) alert(`평가자는 최대 ${MAXEV}명까지만 입력할 수 있어 초과한 열은 제외했습니다.`);
 }
+function xlStatus(msg,isErr){ const el=$('#xlStatus'); el.textContent=msg; el.className=isErr?'err':'ok'; }
 function importGrid(file){
+  if(typeof XLSX==='undefined'||!XLSX.read){ xlStatus('엑셀 처리 도구를 불러오지 못했습니다. 인터넷 연결을 확인하고 페이지를 새로고침한 뒤 다시 시도하세요.',true); return; }
+  syncGrid();
+  const has=GRID_ROWS.some(r=>r.some(v=>String(v).trim()));
+  xlStatus(`"${file.name}" 파일을 읽는 중...`,false);
   const fr=new FileReader();
+  fr.onerror=()=>xlStatus('파일을 읽을 수 없습니다.',true);
   fr.onload=()=>{
     try{
       const wb=XLSX.read(fr.result,{type:'array'});
-      const over=setGrid(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''}));
-      alert('엑셀 내용을 표에 불러왔습니다. 내용을 확인한 뒤 "저장"을 눌러야 반영됩니다.'+(over?`\n\n※ 평가자는 최대 ${MAXEV}명까지만 입력되어 초과한 열은 제외했습니다.`:''));
-    }catch(e){ alert('엑셀 파일을 읽을 수 없습니다.'); }
+      const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});
+      const clean=cleanRows(rows);
+      if(!clean.length){ xlStatus(`"${file.name}": 부서·이름이 입력된 줄을 찾지 못했습니다. 첫 번째 시트의 열 순서(부서 | 이름 | 평가자1~3)를 확인하세요.`,true); return; }
+      if(has&&!confirm('엑셀을 올리면 현재 표의 내용이 모두 엑셀 내용으로 교체됩니다.\n(저장하기 전까지는 서버의 평가표는 바뀌지 않습니다.)\n계속할까요?')){ xlStatus('불러오기를 취소했습니다.',false); return; }
+      const over=setGrid(rows);
+      xlStatus(`✔ "${file.name}"에서 ${clean.length}줄을 불러왔습니다. 내용을 확인한 뒤 "저장"을 눌러야 서버에 반영되며, 저장하면 기존 평가표 전체가 이 내용으로 교체됩니다.`+(over?` (평가자는 최대 ${MAXEV}명까지만 반영되어 초과한 열은 제외했습니다.)`:''),false);
+    }catch(e){ xlStatus('엑셀 파일을 읽을 수 없습니다. 파일 형식(.xlsx, .xls, .csv)을 확인하세요.',true); }
   };
   fr.readAsArrayBuffer(file);
 }
@@ -429,28 +466,47 @@ function exportGrid(sample){
     let rows=sample?[['1병동','홍길동','김평가','이평가'],['2병동','김말숙','양일차','홍이차']]:GRID_ROWS.filter(r=>r[0]||r[1]);
     if(!rows.length) rows=[['1병동','홍길동','김평가','이평가']];
     const n=MAXEV;
-    const aoa=[['피평가자','',...Array(n).fill('평가자')],['부서','이름',...Array(n).fill('')],
+    const aoa=[['부서','이름',...Array.from({length:n},(_,k)=>`평가자${k+1}`)],
       ...rows.map(r=>{const x=r.slice(); while(x.length<2+n) x.push(''); return x;})];
     const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=aoa[0].map(()=>({wch:14}));
     const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'평가표');
     XLSX.writeFile(wb,sample?'평가표_양식.xlsx':`평가표_${today()}.xlsx`);
   }catch(e){ alert('엑셀 파일을 만들 수 없습니다.'); }
 }
+function detectRenames(out){
+  // 새 배정에서 완전히 사라진 평가자 X가, 같은 직원·같은 차수 칸에서 새 이름 Y로 바뀐 경우를 이름 변경으로 추정
+  const oldNames=new Set(SERVER.assign.map(a=>a.evaluator)), newNames=new Set(out.map(a=>a.evaluator));
+  const bySlot=new Map();
+  for(const a of out) for(const it of a.items) bySlot.set(it.ward+'|'+it.staff+'|'+it.slot,a.evaluator);
+  const votes=new Map();
+  for(const a of SERVER.assign){
+    if(newNames.has(a.evaluator)) continue;
+    for(const it of a.items){
+      const y=bySlot.get(it.ward+'|'+it.staff+'|'+it.slot);
+      if(y&&!oldNames.has(y)){ const k=a.evaluator+'\u0001'+y; votes.set(k,(votes.get(k)||0)+1); }
+    }
+  }
+  const best=new Map();
+  for(const [k,n] of votes){ const [x,y]=k.split('\u0001'); if(!best.has(x)||best.get(x).n<n) best.set(x,{y,n}); }
+  return [...best].map(([x,v])=>({from:x,to:v.y})).filter(p=>SERVER.doneList.some(d=>d[0]===p.from));
+}
 async function saveGrid(){
   syncGrid();
   const evMap=new Map();
   for(const [i,r] of GRID_ROWS.entries()){
-    const ward=r[0].trim(), staff=r[1].trim(), evs=[...new Set(r.slice(2).map(x=>x.trim()).filter(Boolean))];
+    const ward=r[0].trim(), staff=r[1].trim(), evs=[];
+    r.slice(2).forEach((x,k)=>{ const n=x.trim(); if(n&&!evs.some(z=>z.n===n)) evs.push({n,slot:k+1}); }); // slot = 평가자 칸 번호(차수)
     if(!ward&&!staff&&!evs.length) continue;
     if(!ward||!staff) return alert(`${i+1}행: 부서와 피평가자 이름을 모두 입력하세요.`);
     if(!evs.length) return alert(`${i+1}행(${ward} ${staff}): 평가자를 한 명 이상 입력하세요.`);
-    for(const ev of evs){
+    for(const {n:ev,slot} of evs){
       if(!evMap.has(ev)) evMap.set(ev,[]);
-      const items=evMap.get(ev); if(!items.some(it=>it.ward===ward&&it.staff===staff)) items.push({ward,staff});
+      const items=evMap.get(ev); if(!items.some(it=>it.ward===ward&&it.staff===staff)) items.push({ward,staff,slot,order:i+1});
     }
   }
   const out=[...evMap].map(([evaluator,items])=>({evaluator,items}));
-  if(!out.length) return alert('저장할 내용이 없습니다.');
+  if(!out.length) return alert('저장할 내용이 없습니다.\n평가자 배정을 전부 지울 수는 없으며, 최소 한 줄 이상 입력해야 합니다.');
+  const renames=detectRenames(out);
   const known=new Set(wardNames());
   const missing=[...new Set(out.flatMap(a=>a.items.map(it=>it.ward)))].filter(w=>!known.has(w));
   const cnt=out.reduce((n,a)=>n+a.items.length,0);
@@ -461,7 +517,19 @@ async function saveGrid(){
       if(!w.ok) return alert('부서 저장에 실패했습니다: '+(w.error||(w.auth===false?'비밀번호 오류':'알 수 없는 오류')));
     }
     const r=await api('saveAssign',{pw:ADMINPW,assign:out});
-    if(r.ok){ await loadConfig(); renderWardEdit(); renderGrid(); alert('평가표를 저장했습니다.'); }
+    if(r.ok){
+      GRID_DIRTY=false; let note='';
+      for(const p of renames){
+        if(confirm(`평가자 이름이 "${p.from}" → "${p.to}"(으)로 바뀐 것으로 보입니다.\n"${p.from}" 이름으로 이미 제출된 평가 결과도 "${p.to}"로 바꿀까요?\n\n[확인] 결과의 평가자 이름도 함께 변경\n[취소] 기존 결과는 그대로 두기 (새 이름은 미평가로 시작)`)){
+          try{
+            const rr=await api('renameEvaluator',{pw:ADMINPW,from:p.from,to:p.to});
+            note+=rr.ok?`\n"${p.from}" → "${p.to}": 결과 ${rr.renamed||0}건 변경`+(rr.skipped?` (이미 있는 ${rr.skipped}건은 제외)`:''):`\n결과 이름 변경 실패: ${rr.error||'알 수 없는 오류'}`;
+          }catch(e){ note+='\n결과 이름 변경 중 오류가 발생했습니다.'; }
+        }
+      }
+      const loaded=await loadConfig(); renderWardEdit(); renderGrid(); loadResults().catch(()=>{});
+      alert(loaded?('평가표를 저장했습니다.'+note):'저장은 되었지만 최신 내용을 불러오지 못했습니다. 페이지를 새로고침해 주세요.'+note);
+    }
     else alert('저장에 실패했습니다: '+(r.error||(r.auth===false?'비밀번호 오류':'알 수 없는 오류')));
   }catch(e){ alert('서버에 연결할 수 없습니다.'); }
 }
@@ -513,7 +581,7 @@ function applyLock(){
 }
 async function tryLogin(){
   ADMINPW=$('#pw').value; $('#pwErr').textContent='확인 중...';
-  try{ await loadResults(); applyLock(); }
+  try{ await loadResults(); await loadConfig(); applyLock(); }
   catch(e){ ADMINPW=''; $('#pwErr').textContent=e.message==='auth'?'비밀번호가 올바르지 않습니다.':'서버에 연결할 수 없습니다. 설정(apiUrl)을 확인하세요.'; }
 }
 function exportXlsx(){
@@ -527,14 +595,14 @@ function show(tab){
   $('#tabAdmin').textContent=tab==='admin'?'← 설문으로':'결과 관리';
   if(tab==='admin') applyLock(); else {ADMINPW=''; loadConfig();}
 }
-$('#tabAdmin').onclick=()=>show($('#viewAdmin').classList.contains('hidden')?'admin':'form');
+$('#tabAdmin').onclick=()=>{ const inAdmin=!$('#viewAdmin').classList.contains('hidden'); if(inAdmin&&!leaveOk()) return; show(inAdmin?'form':'admin'); };
 $('#staffList').addEventListener('change',e=>{ if(e.target.name==='staffpick'){ $('#staff').value=e.target.value; renderStaff(); } });
 $('#submit').onclick=submitForm; $('#reset').onclick=resetForm;
 $('#pwOk').onclick=tryLogin;
 $('#pw').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();tryLogin()}});
 $('#xlsx').onclick=exportXlsx;
 $('#refresh').onclick=()=>loadResults().catch(()=>alert('불러오지 못했습니다.'));
-$('#lockNow').onclick=()=>{ADMINPW='';applyLock()};
+$('#lockNow').onclick=()=>{ if(!leaveOk()) return; ADMINPW=''; applyLock(); };
 $('#tbl').addEventListener('click',e=>{
   const t=e.target; if(t.dataset.del!==undefined) deleteRow(Number(t.dataset.del)); else if(t.dataset.edit!==undefined) openEdit(Number(t.dataset.edit));
 });
@@ -562,6 +630,7 @@ $('#xlUp').onclick=()=>$('#xlFile').click();
 $('#xlFile').onchange=e=>{ if(e.target.files[0]) importGrid(e.target.files[0]); e.target.value=''; };
 $('#gridBox').addEventListener('click',e=>{ const d=e.target.dataset.rdel; if(d!==undefined) delRow(Number(d)); });
 $('#gridBox').addEventListener('paste',onGridPaste);
+$('#gridBox').addEventListener('input',()=>{ GRID_DIRTY=true; });
 $('#savePeriod').onclick=()=>savePeriod(false); $('#clearPeriod').onclick=()=>savePeriod(true);
 $('#evInput').addEventListener('input',()=>matchEvaluator(false));
 $('#evInput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); matchEvaluator(true); } });
