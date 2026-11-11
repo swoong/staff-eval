@@ -34,6 +34,18 @@ th{background:var(--bg)}
 .row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
 .hidden{display:none}
 button.danger{color:var(--danger)}
+#stTable th,#stTable td,#stEvTable th,#stEvTable td,#stOrphanTable th,#stOrphanTable td{font-size:13px}
+th.s1,td.s1{position:sticky;left:0;z-index:1;min-width:76px;max-width:76px}
+th.s2,td.s2{position:sticky;left:76px;z-index:1;min-width:84px}
+td.s1,td.s2{background:var(--card)}
+th.s1,th.s2{background:var(--bg);z-index:2}
+.miss{color:var(--danger);font-weight:600}
+.mute{color:var(--muted);text-align:center}
+td.cm{max-width:180px;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+td.cm.open{white-space:normal;max-width:360px}
+tr.evrow{cursor:pointer}
+.bad{color:var(--danger);font-weight:700}
+.gh{text-align:center}
 #gridBox input{width:100%;min-width:110px;padding:6px 8px}
 .locked{pointer-events:none;opacity:.5}
 button.sm{padding:4px 10px;font-size:13px}
@@ -90,11 +102,38 @@ button.ghost{font-size:12px;color:var(--muted);padding:3px 9px;white-space:nowra
       <div class="row"><button class="primary" id="pwOk">확인</button></div>
     </div>
     <div id="adminBody" class="hidden">
+      <div class="row" style="margin-top:0;justify-content:space-between;align-items:center">
+        <div class="row" style="margin:0"><button id="subStatus" class="primary">현황조회</button><button id="subMain">결과·설정</button></div>
+        <button id="lockNow">잠금</button>
+      </div>
+      <div id="adminStatus">
+        <div class="card">
+          <div class="row" style="align-items:center;margin-top:0">
+            <select id="stWard" style="width:auto"><option value="">전체 부서</option></select>
+            <label class="opt" style="padding:0"><input type="checkbox" id="stMiss"> 미평가가 있는 것만 보기</label>
+            <button id="stRefresh">새로고침</button>
+            <button class="primary" id="stXlsx">엑셀 다운로드(전체)</button>
+          </div>
+          <div id="stSummary" style="font-weight:600"></div>
+          <div id="stMsg" class="hint"></div>
+        </div>
+        <div class="card">
+          <h2>① 평가자별 미평가 현황</h2>
+          <div class="hint" style="margin-bottom:8px">평가자 줄을 누르면 미평가 직원이 펼쳐집니다.</div>
+          <div class="tablebox" id="stEv"></div>
+        </div>
+        <div class="card">
+          <h2>② 피평가자별 1·2·3차 입력 결과</h2>
+          <div class="hint" style="margin-bottom:8px">피평가자 한 명이 한 줄입니다. 좌우로 스크롤해서 보세요. 개선필요사항은 누르면 전체 문구가 펼쳐집니다. 엑셀 다운로드에는 항상 전체 내용이 들어갑니다.</div>
+          <div class="tablebox" id="stStaff"></div>
+          <div id="stOrphan"></div>
+        </div>
+      </div>
+      <div id="adminMain" class="hidden">
       <div class="card">
         <div class="row">
           <button class="primary" id="xlsx">엑셀(.xlsx) 다운로드</button>
           <button id="refresh">새로고침</button>
-          <button id="lockNow">잠금</button>
         </div>
         <div class="hint" id="count"></div>
       </div>
@@ -128,6 +167,7 @@ button.ghost{font-size:12px;color:var(--muted);padding:3px 9px;white-space:nowra
         <div class="tablebox" id="gridBox"></div>
         <datalist id="wardList"></datalist><datalist id="evList"></datalist>
         <div class="row"><button id="addRow">+ 행 추가</button><button class="primary" id="saveGrid">저장</button></div>
+      </div>
       </div>
     </div>
   </section>
@@ -366,8 +406,8 @@ const MAXEV=3; // 피평가자 1명당 평가자는 최대 3명 (평가자2·3�
 let GRID_ROWS=[], EVCOLS=MAXEV;
 const blankRow=()=>Array(2+EVCOLS).fill('');
 const isHeaderRow=c=>['피평가자','부서','부서명'].includes(String(c[0]||'').trim())||String(c[1]||'').trim()==='이름';
-function gridFromAssign(){
-  // 서버에 저장된 '차수(slot)'와 '순번(order)'으로 입력했던 표를 그대로 복원
+function assignTable(){
+  // 서버에 저장된 '차수(slot)'와 '순번(order)'으로 피평가자별 평가자1·2·3 표를 복원
   const map=new Map(); let seq=0, over=false;
   for(const a of SERVER.assign) for(const it of a.items){
     const k=it.ward+'|'+it.staff;
@@ -388,10 +428,14 @@ function gridFromAssign(){
     const i=order.indexOf(x.ward), j=order.indexOf(y.ward);
     return ((i<0?99:i)-(j<0?99:j))||(x.seq-y.seq);
   });
+  return {list,over};
+}
+function gridFromAssign(){
+  const t=assignTable();
   EVCOLS=MAXEV;
-  GRID_ROWS=list.map(r=>[r.ward,r.staff,...r.evs]);
+  GRID_ROWS=t.list.map(r=>[r.ward,r.staff,...r.evs]);
   if(!GRID_ROWS.length) GRID_ROWS=[blankRow(),blankRow(),blankRow()];
-  if(over) alert('일부 직원에게 평가자가 4명 이상 배정되어 있어 표에는 3명까지만 표시됩니다.\n이 표를 그대로 저장하면 초과된 평가자 배정은 제외됩니다.');
+  if(t.over) alert('일부 직원에게 평가자가 4명 이상 배정되어 있어 표에는 3명까지만 표시됩니다.\n이 표를 그대로 저장하면 초과된 평가자 배정은 제외됩니다.');
 }
 function renderGrid(){ gridFromAssign(); GRID_DIRTY=false; drawGrid(); }
 function drawGrid(){
@@ -541,6 +585,100 @@ async function deleteRow(i){
     if(res.ok){ await loadResults(); loadConfig(); } else alert('삭제 실패: '+(res.error||'알 수 없는 오류'));
   }catch(e){ alert('서버에 연결할 수 없습니다.'); }
 }
+/* ===== 현황조회 ===== */
+const num=v=>(v===''||v==null)?'':Number(v);
+function statusData(){
+  const n=CONFIG.questions.length, total=5+n, cmt=6+n;
+  const rm=new Map(); for(const r of ROWS) rm.set(String(r[1])+'|'+String(r[3])+'|'+String(r[4]),r);
+  const t=assignTable(), used=new Set();
+  const rows=t.list.map(r=>{
+    const slots=r.evs.map(ev=>{
+      if(!ev) return {ev:'',state:'none'};
+      const k=ev+'|'+r.ward+'|'+r.staff; used.add(k);
+      const res=rm.get(k); return res?{ev,state:'done',res}:{ev,state:'miss'};
+    });
+    const assigned=slots.filter(x=>x.state!=='none').length, done=slots.filter(x=>x.state==='done').length;
+    return {ward:r.ward,staff:r.staff,slots,assigned,done};
+  });
+  const orphan=ROWS.filter(r=>!used.has(String(r[1])+'|'+String(r[3])+'|'+String(r[4])));
+  const byEv=SERVER.assign.map(a=>({evaluator:a.evaluator,items:a.items.map(it=>({ward:it.ward,staff:it.staff,slot:it.slot,done:rm.has(a.evaluator+'|'+it.ward+'|'+it.staff)}))}));
+  return {rows,orphan,byEv,n,total,cmt};
+}
+const slotTxt=s=>s?`(${s}차)`:'';
+function renderStatus(){
+  const d=statusData(), qs=CONFIG.questions, n=d.n;
+  // 부서 필터 목록 갱신
+  const cur=$('#stWard').value;
+  const wardsAll=[...new Set([...wardNames(),...d.rows.map(r=>r.ward),...d.orphan.map(r=>String(r[3]))])];
+  $('#stWard').innerHTML='<option value="">전체 부서</option>'+wardsAll.map(w=>`<option${w===cur?' selected':''}>${esc(w)}</option>`).join('');
+  const ward=$('#stWard').value, missOnly=$('#stMiss').checked;
+  // 전체 진행 요약
+  const inW=d.rows.filter(r=>!ward||r.ward===ward);
+  const sumA=inW.reduce((x,r)=>x+r.assigned,0), sumD=inW.reduce((x,r)=>x+r.done,0);
+  $('#stSummary').textContent=sumA?`전체 진행: 완료 ${sumD} / ${sumA}건 (${Math.round(sumD/sumA*100)}%) · 미평가 ${sumA-sumD}건`:'평가자 배정이 없습니다. "결과·설정"에서 평가표를 등록하세요.';
+  // ① 평가자별
+  let h='<table id="stEvTable"><tr><th>평가자</th><th>배정</th><th>완료</th><th>미평가</th><th>진행률</th></tr>', cnt=0;
+  for(const e of d.byEv){
+    const items=e.items.filter(it=>!ward||it.ward===ward); if(!items.length) continue;
+    const done=items.filter(it=>it.done).length, miss=items.length-done;
+    if(missOnly&&!miss) continue; cnt++;
+    const pct=Math.round(done/items.length*100);
+    const list=items.filter(it=>!it.done).map(it=>`${esc(it.ward)} ${esc(it.staff)}${slotTxt(it.slot)}`).join(', ');
+    h+=`<tr class="evrow"><td><b>${esc(e.evaluator)}</b></td><td>${items.length}</td><td>${done}</td><td class="${miss?'bad':''}">${miss}</td><td>${pct}%${miss?'':' ✔'}</td></tr>`;
+    h+=`<tr class="hidden"><td colspan="5" style="white-space:normal">${miss?'<b>미평가 직원:</b> '+list:'모두 완료했습니다.'}</td></tr>`;
+  }
+  $('#stEv').innerHTML=cnt?h+'</table>':'<div class="hint">표시할 평가자가 없습니다.</div>';
+  // ② 피평가자별 한 줄
+  const rowsF=d.rows.filter(r=>(!ward||r.ward===ward)&&(!missOnly||r.done<r.assigned));
+  let t='<table id="stTable"><tr><th class="s1" rowspan="2">부서</th><th class="s2" rowspan="2">피평가자</th><th rowspan="2">진행</th>'+[1,2,3].map(k=>`<th class="gh" colspan="${n+4}">${k}차</th>`).join('')+'</tr><tr>';
+  for(let k=1;k<=MAXEV;k++) t+='<th>평가자</th><th>평가일</th>'+qs.map(q=>`<th>${esc(q.label)}(${q.max})</th>`).join('')+'<th>합계</th><th>개선필요사항</th>';
+  t+='</tr>';
+  for(const r of rowsF){
+    t+=`<tr><td class="s1">${esc(r.ward)}</td><td class="s2"><b>${esc(r.staff)}</b></td><td class="${r.done<r.assigned?'bad':''}">${r.done}/${r.assigned}</td>`;
+    for(const s of r.slots){
+      if(s.state==='none') t+=`<td colspan="${n+4}" class="mute">-</td>`;
+      else if(s.state==='miss') t+=`<td>${esc(s.ev)}</td><td colspan="${n+3}" class="miss">미평가</td>`;
+      else { const x=s.res; t+=`<td>${esc(s.ev)}</td><td>${esc(x[2])}</td>`+qs.map((_,i)=>`<td>${esc(x[5+i])}</td>`).join('')+`<td><b>${esc(x[d.total])}</b></td><td class="cm" title="누르면 펼쳐집니다">${esc(x[d.cmt])}</td>`; }
+    }
+    t+='</tr>';
+  }
+  $('#stStaff').innerHTML=rowsF.length?t+'</table>':'<div class="hint">표시할 피평가자가 없습니다.</div>';
+  // 배정 없음 결과
+  const orph=d.orphan.filter(r=>!ward||String(r[3])===ward);
+  $('#stOrphan').innerHTML=orph.length?`<h2 style="margin-top:16px">배정 없음 결과 (${orph.length}건)</h2><div class="hint" style="margin-bottom:8px">평가자 배정에서 빠진 직원·평가자의 기존 결과입니다. 엑셀에는 별도 시트로 들어갑니다.</div><div class="tablebox"><table id="stOrphanTable"><tr><th>부서</th><th>피평가자</th><th>평가자</th><th>평가일</th>${qs.map(q=>`<th>${esc(q.label)}(${q.max})</th>`).join('')}<th>합계</th><th>개선필요사항</th><th>제출시각</th></tr>`+orph.map(x=>`<tr><td>${esc(x[3])}</td><td>${esc(x[4])}</td><td>${esc(x[1])}</td><td>${esc(x[2])}</td>`+qs.map((_,i)=>`<td>${esc(x[5+i])}</td>`).join('')+`<td><b>${esc(x[d.total])}</b></td><td class="cm">${esc(x[d.cmt])}</td><td>${esc(x[0])}</td></tr>`).join('')+'</table></div>':'';
+}
+function exportStatus(){
+  if(typeof XLSX==='undefined'||!XLSX.utils||!XLSX.writeFile){ $('#stMsg').className='err'; $('#stMsg').textContent='엑셀 처리 도구를 불러오지 못했습니다. 인터넷 연결을 확인하고 페이지를 새로고침한 뒤 다시 시도하세요.'; return; }
+  const d=statusData(), qs=CONFIG.questions;
+  const head=['부서','피평가자','완료/배정'];
+  for(let k=1;k<=MAXEV;k++) head.push(`${k}차 평가자`,`${k}차 상태`,`${k}차 평가일`,...qs.map(q=>`${k}차 ${q.label}(${q.max})`),`${k}차 합계`,`${k}차 개선필요사항`,`${k}차 제출시각`);
+  const a1=[head];
+  for(const r of d.rows){
+    const line=[r.ward,r.staff,`${r.done}/${r.assigned}`];
+    for(const s of r.slots){
+      if(s.state==='none') line.push('','-','',...qs.map(()=>''),'','','');
+      else if(s.state==='miss') line.push(s.ev,'미평가','',...qs.map(()=>''),'','','');
+      else { const x=s.res; line.push(s.ev,'완료',x[2],...qs.map((_,i)=>num(x[5+i])),num(x[d.total]),x[d.cmt],x[0]); }
+    }
+    a1.push(line);
+  }
+  const a2=[['평가자','배정','완료','미평가','진행률(%)','미평가 직원']];
+  for(const e of d.byEv){
+    const done=e.items.filter(it=>it.done).length, miss=e.items.filter(it=>!it.done);
+    a2.push([e.evaluator,e.items.length,done,miss.length,e.items.length?Math.round(done/e.items.length*100):0,miss.map(it=>`${it.ward} ${it.staff}${slotTxt(it.slot)}`).join(', ')]);
+  }
+  const wb=XLSX.utils.book_new();
+  const add=(name,aoa)=>{ const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=aoa[0].map(()=>({wch:14})); XLSX.utils.book_append_sheet(wb,ws,name); };
+  add('피평가자별 현황',a1); add('평가자별 현황',a2);
+  if(d.orphan.length) add('배정 없음 결과',[['부서','피평가자','평가자','평가일',...qs.map(q=>`${q.label}(${q.max})`),'합계','개선필요사항','제출시각'],...d.orphan.map(x=>[x[3],x[4],x[1],x[2],...qs.map((_,i)=>num(x[5+i])),num(x[d.total]),x[d.cmt],x[0]])]);
+  XLSX.writeFile(wb,`평가현황_${today()}.xlsx`);
+  $('#stMsg').className='ok'; $('#stMsg').textContent='엑셀 파일을 만들었습니다. (피평가자별·평가자별·배정 없음 결과 시트 포함, 필터와 관계없이 전체 내용)';
+}
+function showSub(w){
+  $('#adminStatus').classList.toggle('hidden',w!=='status'); $('#adminMain').classList.toggle('hidden',w!=='main');
+  $('#subStatus').classList.toggle('primary',w==='status'); $('#subMain').classList.toggle('primary',w==='main');
+  if(w==='status') renderStatus();
+}
 let EDIT=-1;
 function openEdit(i){
   const r=ROWS[i], n=CONFIG.questions.length; EDIT=i;
@@ -572,11 +710,12 @@ async function loadResults(){
   const r=await api('results',{pw:ADMINPW});
   if(!r.ok) throw new Error(r.auth===false?'auth':(r.error||'error'));
   HEAD=r.headers.length?r.headers:headers(); ROWS=r.rows; renderAdmin();
+  if(!$('#adminStatus').classList.contains('hidden')) renderStatus();
 }
 function applyLock(){
   const on=!!ADMINPW;
   $('#adminLock').classList.toggle('hidden',on); $('#adminBody').classList.toggle('hidden',!on);
-  if(on){ renderWardEdit(); renderGrid(); renderPeriodEdit(); } else $('#editCard').classList.add('hidden');
+  if(on){ renderWardEdit(); renderGrid(); renderPeriodEdit(); showSub('status'); } else $('#editCard').classList.add('hidden');
   if(!on){$('#pw').value='';$('#pwErr').textContent='';}
 }
 async function tryLogin(){
@@ -624,6 +763,14 @@ $('#wardEdit').addEventListener('click',e=>{
     if(confirm(`"${w}" 부서를 삭제할까요? (이미 제출된 결과는 삭제되지 않습니다.)`)){ WARDS_EDIT.splice(i,1); drawWardEdit(); }
   }
 });
+$('#subStatus').onclick=()=>showSub('status'); $('#subMain').onclick=()=>showSub('main');
+$('#stWard').onchange=renderStatus; $('#stMiss').onchange=renderStatus; $('#stXlsx').onclick=exportStatus;
+$('#stRefresh').onclick=async()=>{
+  try{ await loadResults(); await loadConfig(); renderStatus(); $('#stMsg').className='hint'; $('#stMsg').textContent='최신 내용으로 새로 불러왔습니다.'; }
+  catch(e){ $('#stMsg').className='err'; $('#stMsg').textContent='불러오지 못했습니다. 네트워크를 확인하세요.'; }
+};
+$('#stEv').addEventListener('click',e=>{ const tr=e.target.closest('tr.evrow'); if(tr&&tr.nextElementSibling) tr.nextElementSibling.classList.toggle('hidden'); });
+$('#adminStatus').addEventListener('click',e=>{ const td=e.target.closest('td.cm'); if(td) td.classList.toggle('open'); });
 $('#addRow').onclick=addRow; $('#saveGrid').onclick=saveGrid;
 $('#xlTpl').onclick=()=>exportGrid(true); $('#xlOut').onclick=()=>exportGrid(false);
 $('#xlUp').onclick=()=>$('#xlFile').click();
